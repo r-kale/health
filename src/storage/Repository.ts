@@ -1,4 +1,4 @@
-import type { Equipment, Profile, RotationState, Session } from "../types";
+import type { Equipment, Profile, RotationState, Routine, Session } from "../types";
 
 // ---- Repository interface ----------------------------------------------
 // The ONLY persistence contract in the app. Phase 1 ships an IndexedDB
@@ -21,6 +21,9 @@ export interface Repository {
 
   getRotation(profileId: string): Promise<RotationState | null>;
   saveRotation(r: RotationState): Promise<void>;
+
+  getRoutine(profileId: string): Promise<Routine | null>;
+  saveRoutine(r: Routine): Promise<void>;
 
   /** Whole-store export/import — lets the family move data between devices. */
   exportAll(): Promise<string>;

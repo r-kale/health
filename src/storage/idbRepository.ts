@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { Equipment, Profile, RotationState, Session } from "../types";
+import type { Equipment, Profile, RotationState, Routine, Session } from "../types";
 import type { Repository } from "./Repository";
 
 interface GymDB extends DBSchema {
@@ -7,22 +7,28 @@ interface GymDB extends DBSchema {
   equipment: { key: string; value: Equipment; indexes: { byProfile: string } };
   sessions: { key: string; value: Session; indexes: { byProfile: string } };
   rotation: { key: string; value: RotationState };
+  routine: { key: string; value: Routine };
   meta: { key: string; value: string };
 }
 
 const DB_NAME = "gym-tracker";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function open(): Promise<IDBPDatabase<GymDB>> {
   return openDB<GymDB>(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      db.createObjectStore("profiles", { keyPath: "id" });
-      const eq = db.createObjectStore("equipment", { keyPath: "id" });
-      eq.createIndex("byProfile", "profileId");
-      const se = db.createObjectStore("sessions", { keyPath: "id" });
-      se.createIndex("byProfile", "profileId");
-      db.createObjectStore("rotation", { keyPath: "profileId" });
-      db.createObjectStore("meta");
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        db.createObjectStore("profiles", { keyPath: "id" });
+        const eq = db.createObjectStore("equipment", { keyPath: "id" });
+        eq.createIndex("byProfile", "profileId");
+        const se = db.createObjectStore("sessions", { keyPath: "id" });
+        se.createIndex("byProfile", "profileId");
+        db.createObjectStore("rotation", { keyPath: "profileId" });
+        db.createObjectStore("meta");
+      }
+      if (oldVersion < 2) {
+        db.createObjectStore("routine", { keyPath: "profileId" });
+      }
     },
   });
 }
@@ -79,6 +85,13 @@ export class IdbRepository implements Repository {
     await (await this.dbp).put("rotation", r);
   }
 
+  async getRoutine(profileId: string): Promise<Routine | null> {
+    return (await (await this.dbp).get("routine", profileId)) ?? null;
+  }
+  async saveRoutine(r: Routine): Promise<void> {
+    await (await this.dbp).put("routine", r);
+  }
+
   async exportAll(): Promise<string> {
     const db = await this.dbp;
     const dump = {
@@ -87,17 +100,22 @@ export class IdbRepository implements Repository {
       equipment: await db.getAll("equipment"),
       sessions: await db.getAll("sessions"),
       rotation: await db.getAll("rotation"),
+      routine: await db.getAll("routine"),
     };
     return JSON.stringify(dump, null, 2);
   }
   async importAll(json: string): Promise<void> {
     const data = JSON.parse(json);
     const db = await this.dbp;
-    const tx = db.transaction(["profiles", "equipment", "sessions", "rotation"], "readwrite");
+    const tx = db.transaction(
+      ["profiles", "equipment", "sessions", "rotation", "routine"],
+      "readwrite"
+    );
     for (const p of data.profiles ?? []) await tx.objectStore("profiles").put(p);
     for (const e of data.equipment ?? []) await tx.objectStore("equipment").put(e);
     for (const s of data.sessions ?? []) await tx.objectStore("sessions").put(s);
     for (const r of data.rotation ?? []) await tx.objectStore("rotation").put(r);
+    for (const r of data.routine ?? []) await tx.objectStore("routine").put(r);
     await tx.done;
   }
 }

@@ -1,34 +1,58 @@
-import { CATALOG, type CatalogExercise } from "../data/exercises";
+import { CATALOG_BY_ID } from "../data/exercises";
 import type {
   Equipment,
-  Focus,
+  Experience,
   LoggedExercise,
   Profile,
   RotationState,
+  Routine,
+  RoutineDay,
   Session,
 } from "../types";
 
 // ---- Rule-based cadence + progression engine ----------------------------
-// Pure functions: (profile, history, rotation, equipment) -> a planned
-// session. Same input/output contract a future AI generator will satisfy,
-// so the engine can be swapped without touching UI or storage.
+// Pure functions over a profile's editable routine. Same input/output
+// contract a future AI generator will satisfy, so the engine can be swapped
+// without touching UI or storage.
 
-/** Calendar-free rotation. General fitness rotates upper -> lower -> full. */
-export const FOCUS_CYCLE: Focus[] = ["upper", "lower", "full"];
-
-export function nextFocus(rotation: RotationState | null): Focus {
-  const idx = rotation ? rotation.cycleIndex % FOCUS_CYCLE.length : 0;
-  return FOCUS_CYCLE[idx];
+interface ResolvedExercise {
+  name: string;
+  muscleGroups: string[];
+  unit: string;
+  targetSets: number;
+  targetReps: number;
+  step: number;
+  start: number;
 }
 
-/** Human hint about how long since this focus was last trained. */
-export function recoveryHint(rotation: RotationState | null, focus: Focus): string {
-  const last = rotation?.lastTrained?.[focus];
-  if (!last) return "Not trained yet — good place to start.";
-  const days = Math.floor((Date.now() - last) / 86_400_000);
-  if (days <= 0) return "Trained today already.";
-  if (days === 1) return "Last done yesterday.";
-  return `Last done ${days} days ago.`;
+/** Resolve an exercise id to its metadata, from the catalog or a custom machine. */
+function resolveExercise(
+  id: string,
+  equipment: Equipment[],
+  experience: Experience
+): ResolvedExercise {
+  const cat = CATALOG_BY_ID[id];
+  if (cat) {
+    return {
+      name: cat.name,
+      muscleGroups: cat.muscleGroups,
+      unit: cat.unit,
+      targetSets: cat.defaultSets,
+      targetReps: cat.defaultReps,
+      step: cat.step,
+      start: cat.start[experience],
+    };
+  }
+  const custom = equipment.find((e) => e.id === id);
+  return {
+    name: custom?.name ?? "Exercise",
+    muscleGroups: custom?.muscleGroups ?? [],
+    unit: "kg",
+    targetSets: 3,
+    targetReps: 10,
+    step: 2.5,
+    start: 0,
+  };
 }
 
 /** Find the most recent logged value for an exercise, for progression. */
@@ -49,82 +73,62 @@ function lastResultFor(
 }
 
 /** Progressive overload: nudge up if last session hit all targets, else hold. */
-function progress(ex: CatalogExercise, history: Session[], experience: Profile["experience"]): number {
-  const last = lastResultFor(ex.id, history);
-  if (!last) return ex.start[experience];
-  return last.hitTargets ? +(last.value + ex.step).toFixed(2) : last.value;
+function progressedValue(meta: ResolvedExercise, id: string, history: Session[]): number {
+  const last = lastResultFor(id, history);
+  if (!last) return meta.start;
+  return last.hitTargets ? +(last.value + meta.step).toFixed(2) : last.value;
 }
 
-const MAX_EXERCISES = 6;
+/** The routine day suggested for "now", per the schedule mode. */
+export function pickDay(routine: Routine, rotation: RotationState | null): RoutineDay | null {
+  if (routine.days.length === 0) return null;
+  if (routine.scheduleMode === "weekday") {
+    const dow = new Date().getDay();
+    const dayId = routine.weekdayMap[dow];
+    return routine.days.find((d) => d.id === dayId) ?? null;
+  }
+  const idx = (rotation ? rotation.cycleIndex : 0) % routine.days.length;
+  return routine.days[idx];
+}
 
-/**
- * Build today's suggested session for a profile.
- * Picks catalog exercises matching the gym type and focus slot, prioritising
- * variety across muscle groups, and assigns each a progressed starting value.
- */
-export function suggestSession(
+/** Human hint about how long since this day was last trained. */
+export function recoveryHint(rotation: RotationState | null, dayId: string): string {
+  const last = rotation?.lastTrained?.[dayId];
+  if (!last) return "Not trained yet — good place to start.";
+  const days = Math.floor((Date.now() - last) / 86_400_000);
+  if (days <= 0) return "Trained today already.";
+  if (days === 1) return "Last done yesterday.";
+  return `Last done ${days} days ago.`;
+}
+
+/** Build a logged-session draft for a specific routine day. */
+export function buildSessionForDay(
   profile: Profile,
+  day: RoutineDay,
   history: Session[],
-  rotation: RotationState | null,
   equipment: Equipment[]
 ): Session {
-  const focus = nextFocus(rotation);
-
-  const pool = CATALOG.filter(
-    (e) => e.gyms.includes(profile.gymType) && e.focus.includes(focus)
-  );
-
-  // Prefer one exercise per muscle group first for balance, then fill up.
-  const picked: CatalogExercise[] = [];
-  const seenMuscles = new Set<string>();
-  for (const e of pool) {
-    const primary = e.muscleGroups[0];
-    if (!seenMuscles.has(primary)) {
-      picked.push(e);
-      seenMuscles.add(primary);
-    }
-    if (picked.length >= MAX_EXERCISES) break;
-  }
-  for (const e of pool) {
-    if (picked.length >= MAX_EXERCISES) break;
-    if (!picked.includes(e)) picked.push(e);
-  }
-
-  const userExtras = equipment.filter((e) => e.source === "user");
-
-  const exercises: LoggedExercise[] = picked.map((e) => ({
-    exerciseId: e.id,
-    name: e.name,
-    muscleGroups: e.muscleGroups,
-    unit: e.unit,
-    value: progress(e, history, profile.experience),
-    targetSets: e.defaultSets,
-    targetReps: e.defaultReps,
-    completedReps: [],
-    done: false,
-  }));
-
-  // Surface user-added machines that aren't already in the plan.
-  for (const eq of userExtras) {
-    if (exercises.some((x) => x.exerciseId === eq.id)) continue;
-    exercises.push({
-      exerciseId: eq.id,
-      name: eq.name,
-      muscleGroups: eq.muscleGroups,
-      unit: "kg",
-      value: 0,
-      targetSets: 3,
-      targetReps: 10,
+  const exercises: LoggedExercise[] = day.exerciseIds.map((id) => {
+    const meta = resolveExercise(id, equipment, profile.experience);
+    return {
+      exerciseId: id,
+      name: meta.name,
+      muscleGroups: meta.muscleGroups,
+      unit: meta.unit,
+      value: progressedValue(meta, id, history),
+      targetSets: meta.targetSets,
+      targetReps: meta.targetReps,
       completedReps: [],
       done: false,
-    });
-  }
+    };
+  });
 
   return {
     id: crypto.randomUUID(),
     profileId: profile.id,
     date: Date.now(),
-    focus,
+    dayId: day.id,
+    dayName: day.name,
     exercises,
     completed: false,
   };
@@ -133,13 +137,20 @@ export function suggestSession(
 /** Advance the rotation after a session is completed. */
 export function advanceRotation(
   prev: RotationState | null,
+  routine: Routine,
   profileId: string,
-  focus: Focus
+  dayId: string
 ): RotationState {
-  const cycleIndex = (prev ? prev.cycleIndex + 1 : 1) % FOCUS_CYCLE.length;
+  const len = Math.max(1, routine.days.length);
+  // In rotation mode, advance past the day that was just trained.
+  let cycleIndex = prev ? prev.cycleIndex : 0;
+  if (routine.scheduleMode === "rotation") {
+    const trainedIdx = routine.days.findIndex((d) => d.id === dayId);
+    cycleIndex = ((trainedIdx >= 0 ? trainedIdx : cycleIndex) + 1) % len;
+  }
   return {
     profileId,
     cycleIndex,
-    lastTrained: { ...(prev?.lastTrained ?? {}), [focus]: Date.now() },
+    lastTrained: { ...(prev?.lastTrained ?? {}), [dayId]: Date.now() },
   };
 }

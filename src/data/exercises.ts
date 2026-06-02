@@ -210,6 +210,10 @@ export const CATALOG: CatalogExercise[] = [
 
 // ---- Gym presets --------------------------------------------------------
 
+export const CATALOG_BY_ID: Record<string, CatalogExercise> = Object.fromEntries(
+  CATALOG.map((e) => [e.id, e])
+);
+
 export const GYM_PRESETS: { id: GymType; label: string; blurb: string }[] = [
   { id: "full", label: "Fully equipped", blurb: "Machines + free weights + cardio" },
   { id: "machines_cardio", label: "Machines + cardio", blurb: "Typical commercial gym floor" },
