@@ -1,5 +1,6 @@
 import { useApp } from "../state/AppContext";
 import { CATALOG_BY_ID } from "../data/exercises";
+import { isExerciseDone, workingWeight } from "../lib/sets";
 import { Sparkline } from "./Sparkline";
 
 interface Series {
@@ -21,15 +22,16 @@ export function Progress() {
   const ordered = [...sessions].sort((a, b) => a.date - b.date);
   for (const s of ordered) {
     for (const e of s.exercises) {
-      if (!e.done) continue;
+      if (!isExerciseDone(e)) continue;
+      const value = workingWeight(e);
       const key = e.exerciseId;
       if (!map.has(key)) {
-        map.set(key, { id: key, name: name(key), unit: e.unit, points: [], last: e.value });
+        map.set(key, { id: key, name: name(key), unit: e.unit, points: [], last: value });
       }
       const series = map.get(key)!;
-      series.points.push({ date: s.date, value: e.value });
+      series.points.push({ date: s.date, value });
       series.unit = e.unit;
-      series.last = e.value;
+      series.last = value;
     }
   }
 

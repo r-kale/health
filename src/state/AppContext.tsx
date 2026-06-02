@@ -16,6 +16,7 @@ import type {
   RotationState,
   Routine,
   RoutineDay,
+  RoutineTemplate,
   Session,
 } from "../types";
 
@@ -29,6 +30,7 @@ interface AppState {
   sessions: Session[];
   rotation: RotationState | null;
   routine: Routine | null;
+  templates: RoutineTemplate[];
 
   createProfile: (name: string) => Promise<Profile>;
   updateProfile: (p: Profile) => Promise<void>;
@@ -40,7 +42,11 @@ interface AppState {
   buildDay: (dayId: string) => Session | null;
   completeSession: (s: Session) => Promise<void>;
   saveRoutine: (r: Routine) => Promise<void>;
-  addEquipment: (name: string, value: number) => Promise<void>;
+  addEquipment: (name: string, value: number) => Promise<Equipment>;
+
+  saveAsTemplate: (name: string) => Promise<void>;
+  applyTemplate: (templateId: string) => Promise<void>;
+  deleteTemplate: (templateId: string) => Promise<void>;
 
   exportData: () => Promise<string>;
   importData: (json: string) => Promise<void>;
@@ -57,13 +63,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [rotation, setRotation] = useState<RotationState | null>(null);
   const [routine, setRoutine] = useState<Routine | null>(null);
+  const [templates, setTemplates] = useState<RoutineTemplate[]>([]);
 
   // Initial load.
   useEffect(() => {
     (async () => {
-      const [ps, cid] = await Promise.all([repo.getProfiles(), repo.getCurrentProfileId()]);
+      const [ps, cid, tpls] = await Promise.all([
+        repo.getProfiles(),
+        repo.getCurrentProfileId(),
+        repo.getTemplates(),
+      ]);
       setProfiles(ps);
       setCurrentId(cid);
+      setTemplates(tpls);
       setLoading(false);
     })();
   }, []);
@@ -183,11 +195,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addEquipment = useCallback(
-    async (name: string, value: number) => {
-      if (!currentProfile) return;
+    async (name: string, value: number): Promise<Equipment> => {
       const e: Equipment = {
         id: crypto.randomUUID(),
-        profileId: currentProfile.id,
+        profileId: currentProfile?.id ?? "",
         name: name.trim(),
         muscleGroups: [],
         settings: value ? [{ label: "Current value", value: String(value) }] : [],
@@ -196,15 +207,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
       await repo.saveEquipment(e);
       setEquipment((prev) => [...prev, e]);
+      return e;
     },
     [currentProfile]
   );
 
+  const saveAsTemplate = useCallback(
+    async (name: string) => {
+      if (!routine) return;
+      const t: RoutineTemplate = {
+        id: crypto.randomUUID(),
+        name: name.trim() || "My plan",
+        // Deep copy days so editing the routine later doesn't mutate the template.
+        days: routine.days.map((d) => ({ ...d, exerciseIds: [...d.exerciseIds] })),
+        createdAt: Date.now(),
+      };
+      await repo.saveTemplate(t);
+      setTemplates((prev) => [...prev, t]);
+    },
+    [routine]
+  );
+
+  const applyTemplate = useCallback(
+    async (templateId: string) => {
+      if (!routine) return;
+      const t = templates.find((x) => x.id === templateId);
+      if (!t) return;
+      // Fresh day ids so the new routine is independent of the template.
+      const days: RoutineDay[] = t.days.map((d) => ({
+        id: crypto.randomUUID(),
+        name: d.name,
+        exerciseIds: [...d.exerciseIds],
+      }));
+      const next: Routine = { ...routine, days, weekdayMap: Array(7).fill(null) };
+      await repo.saveRoutine(next);
+      setRoutine(next);
+    },
+    [routine, templates]
+  );
+
+  const deleteTemplate = useCallback(async (templateId: string) => {
+    await repo.deleteTemplate(templateId);
+    setTemplates((prev) => prev.filter((t) => t.id !== templateId));
+  }, []);
+
   const exportData = useCallback(() => repo.exportAll(), []);
   const importData = useCallback(async (json: string) => {
     await repo.importAll(json);
-    const ps = await repo.getProfiles();
+    const [ps, tpls] = await Promise.all([repo.getProfiles(), repo.getTemplates()]);
     setProfiles(ps);
+    setTemplates(tpls);
   }, []);
 
   const value: AppState = {
@@ -216,6 +268,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     sessions,
     rotation,
     routine,
+    templates,
     createProfile,
     updateProfile,
     selectProfile,
@@ -224,6 +277,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     completeSession,
     saveRoutine,
     addEquipment,
+    saveAsTemplate,
+    applyTemplate,
+    deleteTemplate,
     exportData,
     importData,
   };

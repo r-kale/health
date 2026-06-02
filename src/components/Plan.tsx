@@ -23,7 +23,8 @@ function move<T>(arr: T[], i: number, dir: -1 | 1): T[] {
 }
 
 export function Plan() {
-  const { routine, saveRoutine, currentProfile, equipment } = useApp();
+  const { routine, saveRoutine, currentProfile, equipment, templates, saveAsTemplate, applyTemplate, deleteTemplate } =
+    useApp();
   const [pickerDay, setPickerDay] = useState<string | null>(null);
   const [addingDay, setAddingDay] = useState(false);
 
@@ -216,6 +217,42 @@ export function Plan() {
         <button key={p.id} className="ghost block" style={{ marginBottom: 8, textAlign: "left" }} onClick={() => applyPreset(p.id)}>
           {p.label}
         </button>
+      ))}
+
+      <h2>My templates</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Save this plan to reuse it later or load onto another family member's profile.
+      </p>
+      <button
+        className="ghost block"
+        style={{ marginBottom: 10 }}
+        onClick={() => {
+          const name = prompt("Name this plan template:", `${currentProfile.name}'s plan`);
+          if (name) saveAsTemplate(name);
+        }}
+      >
+        💾 Save current plan as template
+      </button>
+      {templates.map((t) => (
+        <div className="card" key={t.id}>
+          <div className="row">
+            <div>
+              <b>{t.name}</b>
+              <div className="muted">{t.days.length} day{t.days.length === 1 ? "" : "s"}</div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                className="sm primary"
+                onClick={() => {
+                  if (confirm(`Load "${t.name}"? This replaces your current days.`)) applyTemplate(t.id);
+                }}
+              >
+                Load
+              </button>
+              <button className="sm ghost" onClick={() => deleteTemplate(t.id)}>✕</button>
+            </div>
+          </div>
+        </div>
       ))}
 
       {/* Exercise picker sheet */}

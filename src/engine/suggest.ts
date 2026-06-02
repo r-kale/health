@@ -1,4 +1,5 @@
 import { CATALOG_BY_ID } from "../data/exercises";
+import { hitTargets, isExerciseDone, seedSets, workingWeight } from "../lib/sets";
 import type {
   Equipment,
   Experience,
@@ -55,18 +56,15 @@ function resolveExercise(
   };
 }
 
-/** Find the most recent logged value for an exercise, for progression. */
+/** Find the most recent logged result for an exercise, for progression. */
 function lastResultFor(
   exerciseId: string,
   history: Session[]
 ): { value: number; hitTargets: boolean } | null {
   for (const s of history) {
-    const ex = s.exercises.find((e) => e.exerciseId === exerciseId && e.done);
+    const ex = s.exercises.find((e) => e.exerciseId === exerciseId && isExerciseDone(e));
     if (ex) {
-      const hit =
-        ex.completedReps.length >= ex.targetSets &&
-        ex.completedReps.every((r) => r >= ex.targetReps);
-      return { value: ex.value, hitTargets: hit };
+      return { value: workingWeight(ex), hitTargets: hitTargets(ex) };
     }
   }
   return null;
@@ -110,16 +108,15 @@ export function buildSessionForDay(
 ): Session {
   const exercises: LoggedExercise[] = day.exerciseIds.map((id) => {
     const meta = resolveExercise(id, equipment, profile.experience);
+    const startWeight = progressedValue(meta, id, history);
     return {
       exerciseId: id,
       name: meta.name,
       muscleGroups: meta.muscleGroups,
       unit: meta.unit,
-      value: progressedValue(meta, id, history),
       targetSets: meta.targetSets,
       targetReps: meta.targetReps,
-      completedReps: [],
-      done: false,
+      sets: seedSets(meta.targetSets, startWeight, meta.targetReps),
     };
   });
 

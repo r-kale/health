@@ -1,17 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { recoveryHint } from "../engine/suggest";
-import type { LoggedExercise, Session } from "../types";
+import { RestTimer, useRestTimer } from "./RestTimer";
+import type { LoggedExercise, LoggedSet, Session } from "../types";
 
-function stepFor(unit: string): number {
+function wtStep(unit: string): number {
   if (unit === "kg") return 2.5;
   if (unit === "min") return 1;
-  return 1; // level / bw reps
+  return 1;
 }
 
 export function Today({ goToPlan }: { goToPlan: () => void }) {
   const { ready, routine, rotation, suggestedDay, buildDay, completeSession, addEquipment } =
     useApp();
+  const rest = useRestTimer();
 
   const [dayId, setDayId] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -20,17 +22,20 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
   const [newName, setNewName] = useState("");
   const [newVal, setNewVal] = useState("");
 
-  // Choose the suggested day once data is ready.
+  // Keep the latest builder in a ref so building depends ONLY on the chosen
+  // day — not on equipment/sessions changing — which previously rebuilt the
+  // draft mid-session and wiped progress when adding a machine.
+  const buildRef = useRef(buildDay);
+  buildRef.current = buildDay;
+
   useEffect(() => {
     if (!ready || !routine || dayId) return;
-    const picked = suggestedDay()?.id ?? routine.days[0]?.id ?? null;
-    setDayId(picked);
+    setDayId(suggestedDay()?.id ?? routine.days[0]?.id ?? null);
   }, [ready, routine, dayId, suggestedDay]);
 
-  // (Re)build the draft session when the selected day changes.
   useEffect(() => {
-    if (dayId && !saved) setSession(buildDay(dayId));
-  }, [dayId, saved, buildDay]);
+    if (dayId && !saved) setSession(buildRef.current(dayId));
+  }, [dayId, saved]);
 
   if (!ready) return <div className="center muted">Loading…</div>;
 
@@ -58,32 +63,54 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
 
   if (!session) return <div className="center muted">Building your plan…</div>;
 
-  const update = (i: number, patch: Partial<LoggedExercise>) =>
+  const patchExercise = (i: number, patch: Partial<LoggedExercise>) =>
     setSession((s) =>
       s ? { ...s, exercises: s.exercises.map((e, j) => (j === i ? { ...e, ...patch } : e)) } : s
     );
 
-  const adjust = (i: number, dir: 1 | -1) => {
-    const e = session.exercises[i];
-    update(i, { value: Math.max(0, +(e.value + dir * stepFor(e.unit)).toFixed(2)) });
+  const patchSet = (ei: number, si: number, patch: Partial<LoggedSet>) => {
+    const ex = session.exercises[ei];
+    patchExercise(ei, { sets: ex.sets.map((set, j) => (j === si ? { ...set, ...patch } : set)) });
   };
 
-  const toggleDone = (i: number) => {
-    const e = session.exercises[i];
-    if (e.done) update(i, { done: false, completedReps: [] });
-    else update(i, { done: true, completedReps: Array(e.targetSets).fill(e.targetReps) });
+  const adjustWeight = (ei: number, si: number, dir: 1 | -1) => {
+    const ex = session.exercises[ei];
+    const set = ex.sets[si];
+    patchSet(ei, si, { weight: Math.max(0, +(set.weight + dir * wtStep(ex.unit)).toFixed(2)) });
   };
 
-  const doneCount = session.exercises.filter((e) => e.done).length;
+  const toggleSet = (ei: number, si: number) => {
+    const wasDone = session.exercises[ei].sets[si].done;
+    patchSet(ei, si, { done: !wasDone });
+    if (!wasDone) rest.start(); // start the rest timer when completing a set
+  };
+
+  const addSet = (ei: number) => {
+    const ex = session.exercises[ei];
+    const last = ex.sets[ex.sets.length - 1];
+    patchExercise(ei, {
+      sets: [...ex.sets, { weight: last?.weight ?? 0, reps: last?.reps ?? ex.targetReps, done: false }],
+    });
+  };
+
+  const removeSet = (ei: number) => {
+    const ex = session.exercises[ei];
+    if (ex.sets.length <= 1) return;
+    patchExercise(ei, { sets: ex.sets.slice(0, -1) });
+  };
+
+  const doneCount = session.exercises.filter((e) => e.sets.some((s) => s.done)).length;
 
   const finish = async () => {
-    await completeSession({ ...session, exercises: session.exercises.filter((e) => e.done) });
+    const logged = session.exercises.filter((e) => e.sets.some((s) => s.done));
+    await completeSession({ ...session, exercises: logged });
     setSaved(true);
   };
 
   const submitAdd = async () => {
     if (!newName.trim()) return;
-    await addEquipment(newName, Number(newVal) || 0);
+    const eq = await addEquipment(newName, Number(newVal) || 0);
+    const w = Number(newVal) || 0;
     setSession((s) =>
       s
         ? {
@@ -91,15 +118,13 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
             exercises: [
               ...s.exercises,
               {
-                exerciseId: crypto.randomUUID(),
-                name: newName.trim(),
+                exerciseId: eq.id,
+                name: eq.name,
                 muscleGroups: [],
                 unit: "kg",
-                value: Number(newVal) || 0,
                 targetSets: 3,
                 targetReps: 10,
-                completedReps: [],
-                done: false,
+                sets: [{ weight: w, reps: 10, done: false }],
               },
             ],
           }
@@ -111,6 +136,8 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
   };
 
   const suggestedId = suggestedDay()?.id;
+  const unitWord = (u: string) =>
+    u === "bw" ? "reps" : u === "min" ? "min" : u === "level" ? "lvl" : "kg";
 
   return (
     <div className="content">
@@ -136,36 +163,59 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
         <div className="card muted">This day has no exercises yet. Add one below or edit it in Plan.</div>
       )}
 
-      {session.exercises.map((e, i) => (
-        <div className="card" key={i}>
+      {session.exercises.map((e, ei) => (
+        <div className="card" key={ei}>
           <div className="ex-head">
             <div>
               <b>{e.name}</b>
               <div className="muted">
-                {e.targetSets} × {e.targetReps} {e.unit === "bw" ? "reps" : ""}{"  "}
+                target {e.targetSets} × {e.targetReps}{"  "}
                 {e.muscleGroups.map((m) => (
                   <span className="tag" key={m}>{m}</span>
                 ))}
               </div>
             </div>
-            <button className={`done-pill ${e.done ? "on" : ""}`} onClick={() => toggleDone(i)}>
-              {e.done ? "Done" : "Mark done"}
-            </button>
           </div>
 
-          <div style={{ height: 12 }} />
-          <div className="row">
-            <span className="muted">
-              {e.unit === "bw" ? "Reps" : e.unit === "min" ? "Minutes" : e.unit === "level" ? "Level" : "Weight"}
-            </span>
-            <div className="stepper">
-              <button onClick={() => adjust(i, -1)}>−</button>
-              <span className="val">
-                {e.value}
-                <span className="unit"> {e.unit === "bw" ? "" : e.unit}</span>
-              </span>
-              <button onClick={() => adjust(i, 1)}>+</button>
+          <div className="set-head muted">
+            <span>Set</span>
+            <span>{unitWord(e.unit) === "kg" ? "Weight" : unitWord(e.unit)}</span>
+            <span>Reps</span>
+            <span></span>
+          </div>
+
+          {e.sets.map((set, si) => (
+            <div className={`set-row ${set.done ? "done" : ""}`} key={si}>
+              <span className="set-n">{si + 1}</span>
+              <div className="numwrap">
+                <button className="mini" onClick={() => adjustWeight(ei, si, -1)}>−</button>
+                <input
+                  className="num"
+                  inputMode="decimal"
+                  value={set.weight}
+                  onChange={(ev) => patchSet(ei, si, { weight: Number(ev.target.value) || 0 })}
+                />
+                <button className="mini" onClick={() => adjustWeight(ei, si, 1)}>+</button>
+              </div>
+              <input
+                className="num"
+                inputMode="numeric"
+                value={set.reps}
+                onChange={(ev) => patchSet(ei, si, { reps: Number(ev.target.value) || 0 })}
+              />
+              <button
+                className={`check ${set.done ? "on" : ""}`}
+                onClick={() => toggleSet(ei, si)}
+                aria-label="Mark set done"
+              >
+                ✓
+              </button>
             </div>
+          ))}
+
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="sm ghost" onClick={() => removeSet(ei)} disabled={e.sets.length <= 1}>− Set</button>
+            <button className="sm ghost" onClick={() => addSet(ei)}>+ Set</button>
           </div>
         </div>
       ))}
@@ -177,8 +227,8 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
             <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Pec Deck" autoFocus />
           </label>
           <label className="field">
-            <span>Value you're on (optional)</span>
-            <input value={newVal} onChange={(e) => setNewVal(e.target.value)} inputMode="decimal" placeholder="kg / level" />
+            <span>Starting weight (optional)</span>
+            <input value={newVal} onChange={(e) => setNewVal(e.target.value)} inputMode="decimal" placeholder="kg" />
           </label>
           <div className="row">
             <button className="ghost" onClick={() => setAdding(false)}>Cancel</button>
@@ -193,6 +243,8 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
       <button className="success block" onClick={finish} disabled={doneCount === 0}>
         Finish session ({doneCount} logged)
       </button>
+
+      <RestTimer rest={rest} />
     </div>
   );
 }

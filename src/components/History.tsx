@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useApp } from "../state/AppContext";
+import { setsSummary } from "../lib/sets";
 import type { Session } from "../types";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -96,11 +97,9 @@ export function History() {
           </div>
           <div style={{ height: 8 }} />
           {s.exercises.map((e, i) => (
-            <div className="row" key={i} style={{ padding: "3px 0" }}>
-              <span>{e.name}</span>
-              <span className="muted">
-                {e.value}{e.unit === "bw" ? "" : e.unit} · {e.completedReps.length || e.targetSets}×{e.targetReps}
-              </span>
+            <div className="row" key={i} style={{ padding: "3px 0", gap: 12 }}>
+              <span style={{ flex: "0 0 auto" }}>{e.name}</span>
+              <span className="muted" style={{ textAlign: "right" }}>{setsSummary(e, e.unit)}</span>
             </div>
           ))}
         </div>

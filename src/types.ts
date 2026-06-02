@@ -36,6 +36,13 @@ export interface Equipment {
   createdAt: number;
 }
 
+/** One logged set: a weight and rep count the user can edit independently. */
+export interface LoggedSet {
+  weight: number;
+  reps: number;
+  done: boolean;
+}
+
 /** One exercise inside a logged session. */
 export interface LoggedExercise {
   exerciseId: string;
@@ -43,13 +50,18 @@ export interface LoggedExercise {
   muscleGroups: string[];
   /** Unit the value is expressed in (kg, level, min, bw = bodyweight). */
   unit: string;
-  /** The "value you are on" — weight / machine level / etc. */
-  value: number;
+  /** Default targets used to seed the sets. */
   targetSets: number;
   targetReps: number;
-  /** Reps actually completed per set; length grows as user logs sets. */
-  completedReps: number[];
-  done: boolean;
+  /** Per-set weight + reps. Editable any time, even after marked done. */
+  sets: LoggedSet[];
+  // --- legacy fields kept so sessions logged before per-set logging still read ---
+  /** @deprecated single working value; superseded by per-set weights. */
+  value?: number;
+  /** @deprecated reps per completed set; superseded by `sets`. */
+  completedReps?: number[];
+  /** @deprecated whole-exercise done flag; now derived from `sets`. */
+  done?: boolean;
 }
 
 export interface Session {
@@ -97,4 +109,12 @@ export interface RotationState {
   cycleIndex: number;
   /** RoutineDay id -> timestamp last trained, for the "what's due" hint. */
   lastTrained: Record<string, number>;
+}
+
+/** A saved, reusable workout plan — shared across all profiles on the device. */
+export interface RoutineTemplate {
+  id: string;
+  name: string;
+  days: RoutineDay[];
+  createdAt: number;
 }

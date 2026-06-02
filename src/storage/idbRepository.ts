@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { Equipment, Profile, RotationState, Routine, Session } from "../types";
+import type { Equipment, Profile, RotationState, Routine, RoutineTemplate, Session } from "../types";
 import type { Repository } from "./Repository";
 
 interface GymDB extends DBSchema {
@@ -8,11 +8,12 @@ interface GymDB extends DBSchema {
   sessions: { key: string; value: Session; indexes: { byProfile: string } };
   rotation: { key: string; value: RotationState };
   routine: { key: string; value: Routine };
+  templates: { key: string; value: RoutineTemplate };
   meta: { key: string; value: string };
 }
 
 const DB_NAME = "gym-tracker";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 function open(): Promise<IDBPDatabase<GymDB>> {
   return openDB<GymDB>(DB_NAME, DB_VERSION, {
@@ -28,6 +29,9 @@ function open(): Promise<IDBPDatabase<GymDB>> {
       }
       if (oldVersion < 2) {
         db.createObjectStore("routine", { keyPath: "profileId" });
+      }
+      if (oldVersion < 3) {
+        db.createObjectStore("templates", { keyPath: "id" });
       }
     },
   });
@@ -92,6 +96,16 @@ export class IdbRepository implements Repository {
     await (await this.dbp).put("routine", r);
   }
 
+  async getTemplates(): Promise<RoutineTemplate[]> {
+    return (await this.dbp).getAll("templates");
+  }
+  async saveTemplate(t: RoutineTemplate): Promise<void> {
+    await (await this.dbp).put("templates", t);
+  }
+  async deleteTemplate(id: string): Promise<void> {
+    await (await this.dbp).delete("templates", id);
+  }
+
   async exportAll(): Promise<string> {
     const db = await this.dbp;
     const dump = {
@@ -101,6 +115,7 @@ export class IdbRepository implements Repository {
       sessions: await db.getAll("sessions"),
       rotation: await db.getAll("rotation"),
       routine: await db.getAll("routine"),
+      templates: await db.getAll("templates"),
     };
     return JSON.stringify(dump, null, 2);
   }
@@ -108,7 +123,7 @@ export class IdbRepository implements Repository {
     const data = JSON.parse(json);
     const db = await this.dbp;
     const tx = db.transaction(
-      ["profiles", "equipment", "sessions", "rotation", "routine"],
+      ["profiles", "equipment", "sessions", "rotation", "routine", "templates"],
       "readwrite"
     );
     for (const p of data.profiles ?? []) await tx.objectStore("profiles").put(p);
@@ -116,6 +131,7 @@ export class IdbRepository implements Repository {
     for (const s of data.sessions ?? []) await tx.objectStore("sessions").put(s);
     for (const r of data.rotation ?? []) await tx.objectStore("rotation").put(r);
     for (const r of data.routine ?? []) await tx.objectStore("routine").put(r);
+    for (const t of data.templates ?? []) await tx.objectStore("templates").put(t);
     await tx.done;
   }
 }
