@@ -56,16 +56,45 @@ export interface Session {
   id: string;
   profileId: string;
   date: number;
-  focus: Focus;
+  /** @deprecated kept for older logged sessions; new sessions use dayName. */
+  focus?: Focus;
+  /** Id of the routine day this session came from. */
+  dayId?: string;
+  /** Human label for the session, e.g. "Push", "Legs". */
+  dayName?: string;
   exercises: LoggedExercise[];
   completed: boolean;
+}
+
+// ---- Customisable routine ----------------------------------------------
+
+/** One training day in the user's routine: an ordered list of exercises. */
+export interface RoutineDay {
+  id: string;
+  name: string;
+  /** Ordered exercise ids (catalog ids or custom equipment ids). */
+  exerciseIds: string[];
+}
+
+export type ScheduleMode = "rotation" | "weekday";
+
+/** A profile's editable routine — order of days and how they're scheduled. */
+export interface Routine {
+  profileId: string;
+  days: RoutineDay[];
+  scheduleMode: ScheduleMode;
+  /**
+   * Weekday assignment for "weekday" mode. Index 0 = Sunday … 6 = Saturday.
+   * Each entry is a RoutineDay id, or null for a rest day.
+   */
+  weekdayMap: (string | null)[];
 }
 
 /** Per-profile cadence state — calendar-free, recovery-by-rotation. */
 export interface RotationState {
   profileId: string;
-  /** Index into the focus cycle for this profile's goal. */
+  /** Index into the routine's day list for the next "anytime" session. */
   cycleIndex: number;
-  /** Focus -> timestamp last trained, for the "what's due" hint. */
-  lastTrained: Partial<Record<Focus, number>>;
+  /** RoutineDay id -> timestamp last trained, for the "what's due" hint. */
+  lastTrained: Record<string, number>;
 }

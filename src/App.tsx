@@ -2,10 +2,12 @@ import { useState } from "react";
 import { useApp } from "./state/AppContext";
 import { Onboarding } from "./components/Onboarding";
 import { Today } from "./components/Today";
+import { Plan } from "./components/Plan";
 import { History } from "./components/History";
+import { Progress } from "./components/Progress";
 import { ProfileSheet } from "./components/ProfileSheet";
 
-type Tab = "today" | "history";
+type Tab = "today" | "plan" | "history" | "progress";
 
 export function App() {
   const { loading, profiles, currentProfile, createProfile } = useApp();
@@ -77,17 +79,27 @@ export function App() {
         </button>
       </div>
 
-      {tab === "today" && <Today key={currentProfile.id} />}
+      {tab === "today" && <Today key={currentProfile.id} goToPlan={() => setTab("plan")} />}
+      {tab === "plan" && <Plan key={currentProfile.id} />}
       {tab === "history" && <History />}
+      {tab === "progress" && <Progress />}
 
       <div className="tabbar">
         <button className={tab === "today" ? "active" : ""} onClick={() => setTab("today")}>
           <span className="ic">🏋️</span>
           Today
         </button>
+        <button className={tab === "plan" ? "active" : ""} onClick={() => setTab("plan")}>
+          <span className="ic">📋</span>
+          Plan
+        </button>
         <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>
-          <span className="ic">📈</span>
+          <span className="ic">🗓️</span>
           History
+        </button>
+        <button className={tab === "progress" ? "active" : ""} onClick={() => setTab("progress")}>
+          <span className="ic">📈</span>
+          Progress
         </button>
       </div>
 

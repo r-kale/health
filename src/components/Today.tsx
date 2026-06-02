@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../state/AppContext";
-import { nextFocus, recoveryHint } from "../engine/suggest";
-import { FOCUS_LABELS } from "../data/exercises";
+import { recoveryHint } from "../engine/suggest";
 import type { LoggedExercise, Session } from "../types";
 
 function stepFor(unit: string): number {
@@ -10,21 +9,52 @@ function stepFor(unit: string): number {
   return 1; // level / bw reps
 }
 
-export function Today() {
-  const { ready, buildToday, completeSession, rotation, addEquipment } = useApp();
-  const focus = nextFocus(rotation);
+export function Today({ goToPlan }: { goToPlan: () => void }) {
+  const { ready, routine, rotation, suggestedDay, buildDay, completeSession, addEquipment } =
+    useApp();
 
-  // Build the suggested session once the profile's data has loaded; the user
-  // then edits this draft. Building eagerly would risk stale/empty data.
+  const [dayId, setDayId] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [saved, setSaved] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newVal, setNewVal] = useState("");
 
+  // Choose the suggested day once data is ready.
   useEffect(() => {
-    if (ready && !session && !saved) setSession(buildToday());
-  }, [ready, session, saved, buildToday]);
+    if (!ready || !routine || dayId) return;
+    const picked = suggestedDay()?.id ?? routine.days[0]?.id ?? null;
+    setDayId(picked);
+  }, [ready, routine, dayId, suggestedDay]);
+
+  // (Re)build the draft session when the selected day changes.
+  useEffect(() => {
+    if (dayId && !saved) setSession(buildDay(dayId));
+  }, [dayId, saved, buildDay]);
+
+  if (!ready) return <div className="center muted">Loading…</div>;
+
+  if (!routine || routine.days.length === 0) {
+    return (
+      <div className="content center">
+        <div style={{ fontSize: 40 }}>📋</div>
+        <h1>No routine yet</h1>
+        <p className="sub">Set up your training days and exercises first.</p>
+        <button className="primary" onClick={goToPlan}>Go to Plan</button>
+      </div>
+    );
+  }
+
+  if (saved) {
+    return (
+      <div className="center">
+        <div style={{ fontSize: 48 }}>✅</div>
+        <h1>Session logged</h1>
+        <p className="sub">Nice work — your rotation has advanced for next time.</p>
+        <button className="primary" onClick={() => window.location.reload()}>Done</button>
+      </div>
+    );
+  }
 
   if (!session) return <div className="center muted">Building your plan…</div>;
 
@@ -35,18 +65,13 @@ export function Today() {
 
   const adjust = (i: number, dir: 1 | -1) => {
     const e = session.exercises[i];
-    const v = Math.max(0, +(e.value + dir * stepFor(e.unit)).toFixed(2));
-    update(i, { value: v });
+    update(i, { value: Math.max(0, +(e.value + dir * stepFor(e.unit)).toFixed(2)) });
   };
 
   const toggleDone = (i: number) => {
     const e = session.exercises[i];
-    if (e.done) {
-      update(i, { done: false, completedReps: [] });
-    } else {
-      // Mark all target sets as hitting the target reps by default.
-      update(i, { done: true, completedReps: Array(e.targetSets).fill(e.targetReps) });
-    }
+    if (e.done) update(i, { done: false, completedReps: [] });
+    else update(i, { done: true, completedReps: Array(e.targetSets).fill(e.targetReps) });
   };
 
   const doneCount = session.exercises.filter((e) => e.done).length;
@@ -85,26 +110,31 @@ export function Today() {
     setAdding(false);
   };
 
-  if (saved) {
-    return (
-      <div className="center">
-        <div style={{ fontSize: 48 }}>✅</div>
-        <h1>Session logged</h1>
-        <p className="sub">
-          Nice work. Your rotation has advanced — next time you'll get a different focus.
-        </p>
-        <button className="primary" onClick={() => window.location.reload()}>
-          Done
-        </button>
-      </div>
-    );
-  }
+  const suggestedId = suggestedDay()?.id;
 
   return (
     <div className="content">
-      <p className="muted">Today's suggestion</p>
-      <h1>{FOCUS_LABELS[focus]}</h1>
-      <p className="sub">{recoveryHint(rotation, focus)}</p>
+      <p className="muted">Today's session</p>
+      <div className="row" style={{ alignItems: "center", gap: 10 }}>
+        <h1 style={{ margin: 0 }}>{session.dayName}</h1>
+        <select
+          value={dayId ?? ""}
+          onChange={(e) => setDayId(e.target.value)}
+          style={{ width: "auto", flex: "0 0 auto" }}
+          aria-label="Choose training day"
+        >
+          {routine.days.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}{d.id === suggestedId ? " (suggested)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="sub">{dayId ? recoveryHint(rotation, dayId) : ""}</p>
+
+      {session.exercises.length === 0 && (
+        <div className="card muted">This day has no exercises yet. Add one below or edit it in Plan.</div>
+      )}
 
       {session.exercises.map((e, i) => (
         <div className="card" key={i}>
@@ -112,17 +142,13 @@ export function Today() {
             <div>
               <b>{e.name}</b>
               <div className="muted">
-                {e.targetSets} × {e.targetReps} {e.unit === "bw" ? "reps" : ""}
-                {"  "}
+                {e.targetSets} × {e.targetReps} {e.unit === "bw" ? "reps" : ""}{"  "}
                 {e.muscleGroups.map((m) => (
                   <span className="tag" key={m}>{m}</span>
                 ))}
               </div>
             </div>
-            <button
-              className={`done-pill ${e.done ? "on" : ""}`}
-              onClick={() => toggleDone(i)}
-            >
+            <button className={`done-pill ${e.done ? "on" : ""}`} onClick={() => toggleDone(i)}>
               {e.done ? "Done" : "Mark done"}
             </button>
           </div>
@@ -160,9 +186,7 @@ export function Today() {
           </div>
         </div>
       ) : (
-        <button className="ghost block" onClick={() => setAdding(true)}>
-          + Add a machine I'm using
-        </button>
+        <button className="ghost block" onClick={() => setAdding(true)}>+ Add a machine I'm using</button>
       )}
 
       <div style={{ height: 16 }} />

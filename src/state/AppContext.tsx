@@ -8,25 +8,38 @@ import {
   type ReactNode,
 } from "react";
 import { repo } from "../storage/idbRepository";
-import { advanceRotation, suggestSession } from "../engine/suggest";
-import type { Equipment, Profile, RotationState, Session } from "../types";
+import { advanceRotation, buildSessionForDay, pickDay } from "../engine/suggest";
+import { buildDefaultRoutine } from "../data/templates";
+import type {
+  Equipment,
+  Profile,
+  RotationState,
+  Routine,
+  RoutineDay,
+  Session,
+} from "../types";
 
 interface AppState {
   loading: boolean;
-  /** True once the active profile's data (equipment/sessions/rotation) is loaded. */
+  /** True once the active profile's data is loaded. */
   ready: boolean;
   profiles: Profile[];
   currentProfile: Profile | null;
   equipment: Equipment[];
   sessions: Session[];
   rotation: RotationState | null;
+  routine: Routine | null;
 
   createProfile: (name: string) => Promise<Profile>;
   updateProfile: (p: Profile) => Promise<void>;
   selectProfile: (id: string | null) => Promise<void>;
 
-  buildToday: () => Session | null;
+  /** Routine day suggested for now (respects schedule mode). */
+  suggestedDay: () => RoutineDay | null;
+  /** Build a logged-session draft for a given routine day. */
+  buildDay: (dayId: string) => Session | null;
   completeSession: (s: Session) => Promise<void>;
+  saveRoutine: (r: Routine) => Promise<void>;
   addEquipment: (name: string, value: number) => Promise<void>;
 
   exportData: () => Promise<string>;
@@ -43,6 +56,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [rotation, setRotation] = useState<RotationState | null>(null);
+  const [routine, setRoutine] = useState<Routine | null>(null);
 
   // Initial load.
   useEffect(() => {
@@ -60,21 +74,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setEquipment([]);
       setSessions([]);
       setRotation(null);
+      setRoutine(null);
       setReady(false);
       return;
     }
     setReady(false);
     let cancelled = false;
     (async () => {
-      const [eq, ss, rot] = await Promise.all([
+      const [eq, ss, rot, allProfiles] = await Promise.all([
         repo.getEquipment(currentId),
         repo.getSessions(currentId),
         repo.getRotation(currentId),
+        repo.getProfiles(),
       ]);
+      let rt = await repo.getRoutine(currentId);
+      // Migration: onboarded profiles created before routines existed get a
+      // sensible default generated from their goal + gym type.
+      const prof = allProfiles.find((p) => p.id === currentId);
+      if (!rt && prof?.onboarded) {
+        rt = buildDefaultRoutine(prof.id, prof.goal, prof.gymType);
+        await repo.saveRoutine(rt);
+      }
       if (cancelled) return;
       setEquipment(eq);
       setSessions(ss);
       setRotation(rot);
+      setRoutine(rt);
       setReady(true);
     })();
     return () => {
@@ -104,32 +129,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return p;
   }, []);
 
-  const updateProfile = useCallback(async (p: Profile) => {
-    await repo.saveProfile(p);
-    setProfiles((prev) => prev.map((x) => (x.id === p.id ? p : x)));
-  }, []);
+  const updateProfile = useCallback(
+    async (p: Profile) => {
+      await repo.saveProfile(p);
+      setProfiles((prev) => prev.map((x) => (x.id === p.id ? p : x)));
+      // Generate the starter routine the first time onboarding completes.
+      if (p.onboarded && p.id === currentId && !(await repo.getRoutine(p.id))) {
+        const rt = buildDefaultRoutine(p.id, p.goal, p.gymType);
+        await repo.saveRoutine(rt);
+        setRoutine(rt);
+      }
+    },
+    [currentId]
+  );
 
   const selectProfile = useCallback(async (id: string | null) => {
     await repo.setCurrentProfileId(id);
     setCurrentId(id);
   }, []);
 
-  const buildToday = useCallback((): Session | null => {
-    if (!currentProfile) return null;
-    return suggestSession(currentProfile, sessions, rotation, equipment);
-  }, [currentProfile, sessions, rotation, equipment]);
+  const suggestedDay = useCallback((): RoutineDay | null => {
+    if (!routine) return null;
+    return pickDay(routine, rotation);
+  }, [routine, rotation]);
+
+  const buildDay = useCallback(
+    (dayId: string): Session | null => {
+      if (!currentProfile || !routine) return null;
+      const day = routine.days.find((d) => d.id === dayId);
+      if (!day) return null;
+      return buildSessionForDay(currentProfile, day, sessions, equipment);
+    },
+    [currentProfile, routine, sessions, equipment]
+  );
 
   const completeSession = useCallback(
     async (s: Session) => {
       const done: Session = { ...s, completed: true, date: Date.now() };
       await repo.saveSession(done);
-      const rot = advanceRotation(rotation, s.profileId, s.focus);
-      await repo.saveRotation(rot);
       setSessions((prev) => [done, ...prev]);
-      setRotation(rot);
+      if (routine && s.dayId) {
+        const rot = advanceRotation(rotation, routine, s.profileId, s.dayId);
+        await repo.saveRotation(rot);
+        setRotation(rot);
+      }
     },
-    [rotation]
+    [rotation, routine]
   );
+
+  const saveRoutine = useCallback(async (r: Routine) => {
+    await repo.saveRoutine(r);
+    setRoutine(r);
+  }, []);
 
   const addEquipment = useCallback(
     async (name: string, value: number) => {
@@ -164,11 +215,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     equipment,
     sessions,
     rotation,
+    routine,
     createProfile,
     updateProfile,
     selectProfile,
-    buildToday,
+    suggestedDay,
+    buildDay,
     completeSession,
+    saveRoutine,
     addEquipment,
     exportData,
     importData,
