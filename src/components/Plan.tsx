@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { CATALOG, CATALOG_BY_ID } from "../data/exercises";
 import { DAY_TEMPLATES, SPLIT_PRESETS, dayFromTemplate, exercisesForTemplate } from "../data/templates";
+import { downloadFile, exportPlanFile, parseTemplateFile, slug } from "../lib/templateFiles";
+import { Machines } from "./Machines";
 import type { Routine, RoutineDay, ScheduleMode } from "../types";
 
 const WEEKDAYS = [
@@ -23,10 +25,28 @@ function move<T>(arr: T[], i: number, dir: -1 | 1): T[] {
 }
 
 export function Plan() {
-  const { routine, saveRoutine, currentProfile, equipment, templates, saveAsTemplate, applyTemplate, deleteTemplate } =
-    useApp();
+  const {
+    routine, saveRoutine, currentProfile, equipment, templates,
+    saveAsTemplate, applyTemplate, deleteTemplate, importPlanFile, importMachineFile,
+  } = useApp();
   const [pickerDay, setPickerDay] = useState<string | null>(null);
   const [addingDay, setAddingDay] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const onImportFile = async (file: File) => {
+    try {
+      const parsed = parseTemplateFile(await file.text());
+      if (parsed.kind === "plan") {
+        await importPlanFile(parsed.data);
+        alert(`Imported plan "${parsed.data.name}" into My templates.`);
+      } else {
+        await importMachineFile(parsed.data);
+        alert(`Imported ${parsed.data.machines.length} machine(s).`);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not import that file.");
+    }
+  };
 
   if (!routine || !currentProfile) {
     return <div className="content center muted">Loading…</div>;
@@ -221,18 +241,31 @@ export function Plan() {
 
       <h2>My templates</h2>
       <p className="muted" style={{ marginTop: 0 }}>
-        Save this plan to reuse it later or load onto another family member's profile.
+        Save this plan to reuse it, download it to edit in any text editor, or import an edited file.
       </p>
-      <button
-        className="ghost block"
-        style={{ marginBottom: 10 }}
-        onClick={() => {
-          const name = prompt("Name this plan template:", `${currentProfile.name}'s plan`);
-          if (name) saveAsTemplate(name);
+      <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+        <button
+          className="ghost block"
+          onClick={() => {
+            const name = prompt("Name this plan template:", `${currentProfile.name}'s plan`);
+            if (name) saveAsTemplate(name);
+          }}
+        >
+          💾 Save plan
+        </button>
+        <button className="ghost block" onClick={() => fileRef.current?.click()}>⬆ Import file</button>
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onImportFile(f);
+          e.target.value = "";
         }}
-      >
-        💾 Save current plan as template
-      </button>
+      />
       {templates.map((t) => (
         <div className="card" key={t.id}>
           <div className="row">
@@ -241,6 +274,13 @@ export function Plan() {
               <div className="muted">{t.days.length} day{t.days.length === 1 ? "" : "s"}</div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
+              <button
+                className="sm ghost"
+                onClick={() => downloadFile(`${slug(t.name)}.json`, exportPlanFile(t, equipment))}
+                aria-label="Download template"
+              >
+                ⬇
+              </button>
               <button
                 className="sm primary"
                 onClick={() => {
@@ -254,6 +294,8 @@ export function Plan() {
           </div>
         </div>
       ))}
+
+      <Machines />
 
       {/* Exercise picker sheet */}
       {pickerDay && (

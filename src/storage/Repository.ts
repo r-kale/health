@@ -22,6 +22,7 @@ export interface Repository {
 
   getEquipment(profileId: string): Promise<Equipment[]>;
   saveEquipment(e: Equipment): Promise<void>;
+  deleteEquipment(id: string): Promise<void>;
 
   getSessions(profileId: string): Promise<Session[]>;
   saveSession(s: Session): Promise<void>;

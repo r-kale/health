@@ -10,6 +10,8 @@ import {
 import { repo } from "../storage/idbRepository";
 import { advanceRotation, buildSessionForDay, pickDay } from "../engine/suggest";
 import { buildDefaultRoutine } from "../data/templates";
+import { CATALOG_BY_ID } from "../data/exercises";
+import type { MachineFile, PlanFile } from "../lib/templateFiles";
 import type {
   Equipment,
   Profile,
@@ -44,9 +46,17 @@ interface AppState {
   saveRoutine: (r: Routine) => Promise<void>;
   addEquipment: (name: string, value: number) => Promise<Equipment>;
 
+  /** Create or update a machine in the library. */
+  upsertEquipment: (e: Equipment) => Promise<void>;
+  removeEquipment: (id: string) => Promise<void>;
+
   saveAsTemplate: (name: string) => Promise<void>;
   applyTemplate: (templateId: string) => Promise<void>;
   deleteTemplate: (templateId: string) => Promise<void>;
+  /** Import a downloaded/edited plan file into My Templates. */
+  importPlanFile: (file: PlanFile) => Promise<void>;
+  /** Import a downloaded/edited machines file into the library. */
+  importMachineFile: (file: MachineFile) => Promise<void>;
 
   exportData: () => Promise<string>;
   importData: (json: string) => Promise<void>;
@@ -212,6 +222,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [currentProfile]
   );
 
+  const upsertEquipment = useCallback(async (e: Equipment) => {
+    await repo.saveEquipment(e);
+    setEquipment((prev) =>
+      prev.some((x) => x.id === e.id) ? prev.map((x) => (x.id === e.id ? e : x)) : [...prev, e]
+    );
+  }, []);
+
+  const removeEquipment = useCallback(async (id: string) => {
+    await repo.deleteEquipment(id);
+    setEquipment((prev) => prev.filter((e) => e.id !== id));
+  }, []);
+
   const saveAsTemplate = useCallback(
     async (name: string) => {
       if (!routine) return;
@@ -251,6 +273,87 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTemplates((prev) => prev.filter((t) => t.id !== templateId));
   }, []);
 
+  const importPlanFile = useCallback(
+    async (file: PlanFile) => {
+      if (!currentProfile) return;
+      // Resolve each exercise to an id: catalog match, existing machine by id
+      // or name, otherwise create a custom machine so it always resolves later.
+      const working = [...equipment];
+      const created: Equipment[] = [];
+      const resolveId = (ex: { id?: string; name: string }): string => {
+        if (ex.id && CATALOG_BY_ID[ex.id]) return ex.id;
+        if (ex.id && working.some((e) => e.id === ex.id)) return ex.id;
+        const byName = working.find(
+          (e) => e.source === "user" && e.name.toLowerCase() === ex.name.toLowerCase()
+        );
+        if (byName) return byName.id;
+        const fresh: Equipment = {
+          id: crypto.randomUUID(),
+          profileId: currentProfile.id,
+          name: ex.name,
+          muscleGroups: [],
+          settings: [],
+          source: "user",
+          createdAt: Date.now(),
+        };
+        working.push(fresh);
+        created.push(fresh);
+        return fresh.id;
+      };
+
+      const days: RoutineDay[] = file.days.map((d) => ({
+        id: crypto.randomUUID(),
+        name: d.name,
+        exerciseIds: d.exercises.map(resolveId),
+      }));
+
+      for (const e of created) await repo.saveEquipment(e);
+      if (created.length) setEquipment((prev) => [...prev, ...created]);
+
+      const t: RoutineTemplate = {
+        id: crypto.randomUUID(),
+        name: file.name,
+        days,
+        createdAt: Date.now(),
+      };
+      await repo.saveTemplate(t);
+      setTemplates((prev) => [...prev, t]);
+    },
+    [currentProfile, equipment]
+  );
+
+  const importMachineFile = useCallback(
+    async (file: MachineFile) => {
+      if (!currentProfile) return;
+      const working = [...equipment];
+      const changed: Equipment[] = [];
+      for (const m of file.machines) {
+        const existing = working.find(
+          (e) => e.source === "user" && e.name.toLowerCase() === m.name.toLowerCase()
+        );
+        const item: Equipment = existing
+          ? { ...existing, muscleGroups: m.muscleGroups, settings: m.settings }
+          : {
+              id: crypto.randomUUID(),
+              profileId: currentProfile.id,
+              name: m.name,
+              muscleGroups: m.muscleGroups,
+              settings: m.settings,
+              source: "user",
+              createdAt: Date.now(),
+            };
+        await repo.saveEquipment(item);
+        changed.push(item);
+      }
+      setEquipment((prev) => {
+        const map = new Map(prev.map((e) => [e.id, e]));
+        for (const c of changed) map.set(c.id, c);
+        return [...map.values()];
+      });
+    },
+    [currentProfile, equipment]
+  );
+
   const exportData = useCallback(() => repo.exportAll(), []);
   const importData = useCallback(async (json: string) => {
     await repo.importAll(json);
@@ -277,9 +380,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     completeSession,
     saveRoutine,
     addEquipment,
+    upsertEquipment,
+    removeEquipment,
     saveAsTemplate,
     applyTemplate,
     deleteTemplate,
+    importPlanFile,
+    importMachineFile,
     exportData,
     importData,
   };

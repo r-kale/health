@@ -73,6 +73,9 @@ export class IdbRepository implements Repository {
   async saveEquipment(e: Equipment): Promise<void> {
     await (await this.dbp).put("equipment", e);
   }
+  async deleteEquipment(id: string): Promise<void> {
+    await (await this.dbp).delete("equipment", id);
+  }
 
   async getSessions(profileId: string): Promise<Session[]> {
     const all = await (await this.dbp).getAllFromIndex("sessions", "byProfile", profileId);
