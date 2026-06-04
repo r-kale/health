@@ -13,6 +13,22 @@ export interface RestApi {
   bump: (delta: number) => void;
 }
 
+/** Short beep via Web Audio. ctx must already be resumed (user-gesture). */
+function beep(ctx: AudioContext) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = "sine";
+  osc.frequency.value = 880;
+  const t = ctx.currentTime;
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.3, t + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+  osc.start(t);
+  osc.stop(t + 0.3);
+}
+
 /** Countdown rest timer with a custom, persisted default duration. */
 export function useRestTimer(): RestApi {
   const [duration, setDurationState] = useState<number>(() => {
@@ -22,6 +38,7 @@ export function useRestTimer(): RestApi {
   const [endsAt, setEndsAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const buzzed = useRef(false);
+  const audioRef = useRef<AudioContext | null>(null);
 
   // Tick only while a timer is running.
   useEffect(() => {
@@ -32,11 +49,12 @@ export function useRestTimer(): RestApi {
 
   const remaining = endsAt ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : 0;
 
-  // Buzz once and clear when the countdown hits zero.
+  // Beep + buzz once and clear when the countdown hits zero.
   useEffect(() => {
     if (endsAt != null && remaining === 0 && !buzzed.current) {
       buzzed.current = true;
       navigator.vibrate?.(200);
+      if (audioRef.current) beep(audioRef.current);
       setEndsAt(null);
     }
   }, [endsAt, remaining]);
@@ -49,6 +67,14 @@ export function useRestTimer(): RestApi {
 
   const start = useCallback(() => {
     buzzed.current = false;
+    // Create/resume the audio context inside this user gesture so the
+    // end-of-rest beep is allowed to play by the browser.
+    if (!audioRef.current) {
+      const AC: typeof AudioContext | undefined =
+        window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AC) audioRef.current = new AC();
+    }
+    void audioRef.current?.resume();
     setNow(Date.now());
     setEndsAt(Date.now() + duration * 1000);
   }, [duration]);

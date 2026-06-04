@@ -11,7 +11,7 @@ function wtStep(unit: string): number {
 }
 
 export function Today({ goToPlan }: { goToPlan: () => void }) {
-  const { ready, routine, rotation, suggestedDay, buildDay, completeSession, addEquipment } =
+  const { ready, routine, rotation, currentProfile, suggestedDay, buildDay, completeSession, addEquipment } =
     useApp();
   const rest = useRestTimer();
 
@@ -22,20 +22,51 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
   const [newName, setNewName] = useState("");
   const [newVal, setNewVal] = useState("");
 
-  // Keep the latest builder in a ref so building depends ONLY on the chosen
-  // day — not on equipment/sessions changing — which previously rebuilt the
-  // draft mid-session and wiped progress when adding a machine.
+  const draftKey = currentProfile ? `gym-draft-${currentProfile.id}` : null;
+
+  // Keep the latest builder in a ref so building depends ONLY on an explicit
+  // day choice — not on equipment/sessions changing — which previously rebuilt
+  // the draft mid-session and wiped progress when adding a machine.
   const buildRef = useRef(buildDay);
   buildRef.current = buildDay;
 
+  // One-time init: restore a saved in-progress draft (survives app restart),
+  // otherwise build a fresh session for the suggested day.
+  const inited = useRef(false);
   useEffect(() => {
-    if (!ready || !routine || dayId) return;
-    setDayId(suggestedDay()?.id ?? routine.days[0]?.id ?? null);
-  }, [ready, routine, dayId, suggestedDay]);
+    if (!ready || !routine || inited.current) return;
+    inited.current = true;
+    if (draftKey) {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        try {
+          const d = JSON.parse(raw) as { dayId: string | null; session: Session };
+          if (d.session) {
+            setDayId(d.dayId);
+            setSession(d.session);
+            return;
+          }
+        } catch {
+          /* ignore corrupt draft */
+        }
+      }
+    }
+    const id = suggestedDay()?.id ?? routine.days[0]?.id ?? null;
+    setDayId(id);
+    if (id) setSession(buildRef.current(id));
+  }, [ready, routine, suggestedDay, draftKey]);
 
+  // Persist the draft on every change so closing the app doesn't lose progress.
   useEffect(() => {
-    if (dayId && !saved) setSession(buildRef.current(dayId));
-  }, [dayId, saved]);
+    if (!draftKey || saved) return;
+    if (session) localStorage.setItem(draftKey, JSON.stringify({ dayId, session }));
+  }, [session, dayId, saved, draftKey]);
+
+  // Switching day is an explicit choice: rebuild the draft for that day.
+  const changeDay = (id: string) => {
+    setDayId(id);
+    setSession(buildRef.current(id));
+  };
 
   if (!ready) return <div className="center muted">Loading…</div>;
 
@@ -104,6 +135,7 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
   const finish = async () => {
     const logged = session.exercises.filter((e) => e.sets.some((s) => s.done));
     await completeSession({ ...session, exercises: logged });
+    if (draftKey) localStorage.removeItem(draftKey);
     setSaved(true);
   };
 
@@ -146,7 +178,7 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
         <h1 style={{ margin: 0 }}>{session.dayName}</h1>
         <select
           value={dayId ?? ""}
-          onChange={(e) => setDayId(e.target.value)}
+          onChange={(e) => changeDay(e.target.value)}
           style={{ width: "auto", flex: "0 0 auto" }}
           aria-label="Choose training day"
         >
