@@ -36,10 +36,16 @@ export function hitTargets(ex: LoggedExercise): boolean {
   return done.length >= ex.targetSets && done.every((s) => s.reps >= ex.targetReps);
 }
 
-/** Compact summary like "60×10, 60×10, 62.5×8". */
+/** Compact summary: "3 × 51.5kg × 10" when uniform, else "50×10, 50×8, 45×8". */
 export function setsSummary(ex: LoggedExercise, unit: string): string {
   const done = getSets(ex).filter((s) => s.done);
   const sets = done.length ? done : getSets(ex);
+  if (sets.length === 0) return "—";
   const u = unit === "bw" ? "" : unit;
+  const uniform = sets.every((s) => s.weight === sets[0].weight && s.reps === sets[0].reps);
+  if (uniform) {
+    const s = sets[0];
+    return `${sets.length} × ${s.weight}${u} × ${s.reps}`;
+  }
   return sets.map((s) => `${s.weight}${u}×${s.reps}`).join(", ");
 }

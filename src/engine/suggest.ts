@@ -1,5 +1,5 @@
 import { CATALOG_BY_ID } from "../data/exercises";
-import { hitTargets, isExerciseDone, seedSets, workingWeight } from "../lib/sets";
+import { getSets, isExerciseDone, seedSets } from "../lib/sets";
 import type {
   Equipment,
   Experience,
@@ -56,25 +56,14 @@ function resolveExercise(
   };
 }
 
-/** Find the most recent logged result for an exercise, for progression. */
-function lastResultFor(
-  exerciseId: string,
-  history: Session[]
-): { value: number; hitTargets: boolean } | null {
+/** The most recent logged instance of an exercise, to seed the next session. */
+function lastExerciseFor(exerciseId: string, history: Session[]): LoggedExercise | null {
+  // history is newest-first.
   for (const s of history) {
     const ex = s.exercises.find((e) => e.exerciseId === exerciseId && isExerciseDone(e));
-    if (ex) {
-      return { value: workingWeight(ex), hitTargets: hitTargets(ex) };
-    }
+    if (ex) return ex;
   }
   return null;
-}
-
-/** Progressive overload: nudge up if last session hit all targets, else hold. */
-function progressedValue(meta: ResolvedExercise, id: string, history: Session[]): number {
-  const last = lastResultFor(id, history);
-  if (!last) return meta.start;
-  return last.hitTargets ? +(last.value + meta.step).toFixed(2) : last.value;
 }
 
 /** The routine day suggested for "now", per the schedule mode. */
@@ -108,7 +97,13 @@ export function buildSessionForDay(
 ): Session {
   const exercises: LoggedExercise[] = day.exerciseIds.map((id) => {
     const meta = resolveExercise(id, equipment, profile.experience);
-    const startWeight = progressedValue(meta, id, history);
+    // Prefer the user's last actual sets (weight + reps per set) so each
+    // session starts where the previous one left off; fall back to defaults.
+    const last = lastExerciseFor(id, history);
+    const prior = last ? getSets(last) : [];
+    const sets = prior.length
+      ? prior.map((s) => ({ weight: s.weight, reps: s.reps, done: false }))
+      : seedSets(meta.targetSets, meta.start, meta.targetReps);
     return {
       exerciseId: id,
       name: meta.name,
@@ -116,7 +111,7 @@ export function buildSessionForDay(
       unit: meta.unit,
       targetSets: meta.targetSets,
       targetReps: meta.targetReps,
-      sets: seedSets(meta.targetSets, startWeight, meta.targetReps),
+      sets,
     };
   });
 

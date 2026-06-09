@@ -130,10 +130,23 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
     patchExercise(ei, { sets: ex.sets.slice(0, -1) });
   };
 
-  const doneCount = session.exercises.filter((e) => e.sets.some((s) => s.done)).length;
+  // An exercise is loggable if it has any set with reps entered.
+  const loggable = session.exercises.filter((e) => e.sets.some((s) => s.reps > 0)).length;
 
   const finish = async () => {
-    const logged = session.exercises.filter((e) => e.sets.some((s) => s.done));
+    // If the user ticked specific sets, record exactly those; otherwise assume
+    // they performed the sets shown (any set with reps > 0). Recorded sets are
+    // marked done so history and progress capture every set, not just one.
+    const logged = session.exercises
+      .map((e) => {
+        const ticked = e.sets.filter((s) => s.done && s.reps > 0);
+        const performed = (ticked.length ? ticked : e.sets.filter((s) => s.reps > 0)).map((s) => ({
+          ...s,
+          done: true,
+        }));
+        return { ...e, sets: performed };
+      })
+      .filter((e) => e.sets.length > 0);
     await completeSession({ ...session, exercises: logged });
     if (draftKey) localStorage.removeItem(draftKey);
     setSaved(true);
@@ -272,8 +285,8 @@ export function Today({ goToPlan }: { goToPlan: () => void }) {
       )}
 
       <div style={{ height: 16 }} />
-      <button className="success block" onClick={finish} disabled={doneCount === 0}>
-        Finish session ({doneCount} logged)
+      <button className="success block" onClick={finish} disabled={loggable === 0}>
+        Finish session ({loggable} logged)
       </button>
 
       <RestTimer rest={rest} />

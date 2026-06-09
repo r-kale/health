@@ -13,20 +13,30 @@ export interface RestApi {
   bump: (delta: number) => void;
 }
 
-/** Short beep via Web Audio. ctx must already be resumed (user-gesture). */
-function beep(ctx: AudioContext) {
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.type = "sine";
-  osc.frequency.value = 880;
-  const t = ctx.currentTime;
-  gain.gain.setValueAtTime(0.0001, t);
-  gain.gain.exponentialRampToValueAtTime(0.3, t + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-  osc.start(t);
-  osc.stop(t + 0.3);
+/** A loud, attention-grabbing alarm: three rising beeps. Scheduled on the
+ *  audio clock so it fires precisely even if JS timers are throttled. Returns
+ *  the scheduled oscillators so they can be cancelled (skip / reschedule). */
+function scheduleAlarm(ctx: AudioContext, atTime: number): OscillatorNode[] {
+  const start = Math.max(atTime, ctx.currentTime + 0.01);
+  const tones = [880, 1175, 1568]; // A5, D6, G6 — bright and rising
+  const oscs: OscillatorNode[] = [];
+  tones.forEach((freq, i) => {
+    const t = start + i * 0.32;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "square"; // richer/louder than sine through phone speakers
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.8, t + 0.02);
+    gain.gain.setValueAtTime(0.8, t + 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+    osc.start(t);
+    osc.stop(t + 0.32);
+    oscs.push(osc);
+  });
+  return oscs;
 }
 
 /** Countdown rest timer with a custom, persisted default duration. */
@@ -39,6 +49,40 @@ export function useRestTimer(): RestApi {
   const [now, setNow] = useState(Date.now());
   const buzzed = useRef(false);
   const audioRef = useRef<AudioContext | null>(null);
+  const scheduledRef = useRef<OscillatorNode[]>([]);
+
+  const cancelAlarm = useCallback(() => {
+    for (const o of scheduledRef.current) {
+      try {
+        o.stop();
+        o.disconnect();
+      } catch {
+        /* already stopped */
+      }
+    }
+    scheduledRef.current = [];
+  }, []);
+
+  const ensureCtx = useCallback((): AudioContext | null => {
+    if (!audioRef.current) {
+      const AC: typeof AudioContext | undefined =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AC) audioRef.current = new AC();
+    }
+    void audioRef.current?.resume();
+    return audioRef.current;
+  }, []);
+
+  /** Arm the alarm to fire in `seconds` from now (audio-clock scheduled). */
+  const arm = useCallback(
+    (seconds: number) => {
+      const ctx = ensureCtx();
+      cancelAlarm();
+      if (ctx) scheduledRef.current = scheduleAlarm(ctx, ctx.currentTime + seconds);
+    },
+    [ensureCtx, cancelAlarm]
+  );
 
   // Tick only while a timer is running.
   useEffect(() => {
@@ -49,12 +93,12 @@ export function useRestTimer(): RestApi {
 
   const remaining = endsAt ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : 0;
 
-  // Beep + buzz once and clear when the countdown hits zero.
+  // Vibrate (where supported) and clear when the countdown hits zero; the
+  // beeps were pre-scheduled on the audio clock so they ring on their own.
   useEffect(() => {
     if (endsAt != null && remaining === 0 && !buzzed.current) {
       buzzed.current = true;
-      navigator.vibrate?.(200);
-      if (audioRef.current) beep(audioRef.current);
+      navigator.vibrate?.([300, 120, 300]);
       setEndsAt(null);
     }
   }, [endsAt, remaining]);
@@ -67,23 +111,27 @@ export function useRestTimer(): RestApi {
 
   const start = useCallback(() => {
     buzzed.current = false;
-    // Create/resume the audio context inside this user gesture so the
-    // end-of-rest beep is allowed to play by the browser.
-    if (!audioRef.current) {
-      const AC: typeof AudioContext | undefined =
-        window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (AC) audioRef.current = new AC();
-    }
-    void audioRef.current?.resume();
+    arm(duration);
     setNow(Date.now());
     setEndsAt(Date.now() + duration * 1000);
-  }, [duration]);
+  }, [duration, arm]);
 
-  const skip = useCallback(() => setEndsAt(null), []);
+  const skip = useCallback(() => {
+    cancelAlarm();
+    setEndsAt(null);
+  }, [cancelAlarm]);
 
-  const bump = useCallback((delta: number) => {
-    setEndsAt((prev) => (prev == null ? null : Math.max(Date.now(), prev + delta * 1000)));
-  }, []);
+  const bump = useCallback(
+    (delta: number) => {
+      setEndsAt((prev) => {
+        if (prev == null) return null;
+        const next = Math.max(Date.now(), prev + delta * 1000);
+        arm((next - Date.now()) / 1000);
+        return next;
+      });
+    },
+    [arm]
+  );
 
   return { duration, setDuration, endsAt, remaining, start, skip, bump };
 }
